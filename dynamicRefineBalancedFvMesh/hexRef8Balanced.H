@@ -22,18 +22,18 @@ License
     along with OpenFOAM.  If not, see <http://www.gnu.org/licenses/>.
 
 Class
-    Foam::hexRef8
+    Foam::hexRef8Balanced
 
 Description
     Refinement of (split) hexes using polyTopoChange.
 
 SourceFiles
-    hexRef8.C
+    hexRef8Balanced.C
 
 \*---------------------------------------------------------------------------*/
 
-#ifndef hexRef8_H
-#define hexRef8_H
+#ifndef hexRef8Balanced_H
+#define hexRef8Balanced_H
 
 #include "labelIOList.H"
 #include "face.H"
@@ -41,7 +41,7 @@ SourceFiles
 #include "DynamicList.H"
 #include "primitivePatch.H"
 #include "removeFaces.H"
-#include "refinementHistory.H"
+#include "refinementHistoryBalanced.H"
 #include "PackedBoolList.H"
 #include "uniformDimensionedFields.H"
 #include "cellShapeList.H"
@@ -59,10 +59,10 @@ class mapPolyMesh;
 class mapDistributePolyMesh;
 
 /*---------------------------------------------------------------------------*\
-                           Class hexRef8 Declaration
+                           Class hexRef8Balanced Declaration
 \*---------------------------------------------------------------------------*/
 
-class hexRef8
+class hexRef8Balanced
 {
     // Private data
 
@@ -79,7 +79,7 @@ class hexRef8
         uniformDimensionedScalarField level0Edge_;
 
         //- Refinement history
-        refinementHistory history_;
+        refinementHistoryBalanced history_;
 
         //- Face remover engine
         removeFaces faceRemover_;
@@ -337,16 +337,16 @@ class hexRef8
 
 
         //- Disallow default bitwise copy construct
-        hexRef8(const hexRef8&);
+        hexRef8Balanced(const hexRef8Balanced&);
 
         //- Disallow default bitwise assignment
-        void operator=(const hexRef8&);
+        void operator=(const hexRef8Balanced&);
 
 
 public:
 
     //- Runtime type information
-    ClassName("hexRef8");
+    ClassName("hexRef8Balanced");
 
 
     // Constructors
@@ -354,22 +354,22 @@ public:
         //- Construct from mesh, read_if_present refinement data
         //  (from write below). If readHistory is true does read_if_present
         //  of refinement history. If false clears all history
-        hexRef8(const polyMesh& mesh, const bool readHistory = true);
+        hexRef8Balanced(const polyMesh& mesh, const bool readHistory = true);
 
         //- Construct from mesh and un/refinement data and optional size of
         //  starting cells
-        hexRef8
+        hexRef8Balanced
         (
             const polyMesh& mesh,
             const labelList& cellLevel,
             const labelList& pointLevel,
-            const refinementHistory& history,
+            const refinementHistoryBalanced& history,
             const scalar level0Edge = -GREAT
         );
 
         //- Construct from mesh and refinement data and optional size of
         //  starting cells
-        hexRef8
+        hexRef8Balanced
         (
             const polyMesh& mesh,
             const labelList& cellLevel,
@@ -397,7 +397,7 @@ public:
                 return pointLevel_;
             }
 
-            const refinementHistory& history() const
+            const refinementHistoryBalanced& history() const
             {
                 return history_;
             }

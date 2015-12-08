@@ -22,7 +22,7 @@ License
     along with OpenFOAM.  If not, see <http://www.gnu.org/licenses/>.
 
 Class
-    Foam::refinementHistory
+    Foam::refinementHistoryBalanced
 
 Description
     All refinement history. Used in unrefinement.
@@ -64,12 +64,12 @@ Description
 
 
 SourceFiles
-    refinementHistory.C
+    refinementHistoryBalanced.C
 
 \*---------------------------------------------------------------------------*/
 
-#ifndef refinementHistory_H
-#define refinementHistory_H
+#ifndef refinementHistoryBalanced_H
+#define refinementHistoryBalanced_H
 
 #include "DynamicList.H"
 #include "labelList.H"
@@ -88,10 +88,10 @@ class mapPolyMesh;
 class mapDistributePolyMesh;
 
 /*---------------------------------------------------------------------------*\
-                           Class refinementHistory Declaration
+                           Class refinementHistoryBalanced Declaration
 \*---------------------------------------------------------------------------*/
 
-class refinementHistory
+class refinementHistoryBalanced
 :
     public regIOobject
 {
@@ -229,16 +229,16 @@ private:
 public:
 
     // Declare name of the class and its debug switch
-    TypeName("refinementHistory");
+    TypeName("refinementHistoryBalanced");
 
 
     // Constructors
 
         //- Construct (read) given an IOobject
-        refinementHistory(const IOobject&);
+        refinementHistoryBalanced(const IOobject&);
 
         //- Construct (read) or construct null
-        refinementHistory
+        refinementHistoryBalanced
         (
             const IOobject&,
             const List<splitCell8>& splitCells,
@@ -247,13 +247,13 @@ public:
 
         //- Construct (read) or construct from initial number of cells
         //  (all visible)
-        refinementHistory(const IOobject&, const label nCells);
+        refinementHistoryBalanced(const IOobject&, const label nCells);
 
         //- Construct as copy
-        refinementHistory(const IOobject&, const refinementHistory&);
+        refinementHistoryBalanced(const IOobject&, const refinementHistoryBalanced&);
 
         //- Construct from Istream
-        refinementHistory(const IOobject&, Istream&);
+        refinementHistoryBalanced(const IOobject&, Istream&);
 
 
     // Member Functions
@@ -293,7 +293,7 @@ public:
 
             if (index < 0)
             {
-                FatalErrorIn("refinementHistory::parentIndex(const label)")
+                FatalErrorIn("refinementHistoryBalanced::parentIndex(const label)")
                     << "Cell " << cellI << " is not visible"
                     << abort(FatalError);
             }
@@ -356,8 +356,8 @@ public:
 
     // IOstream Operators
 
-        friend Istream& operator>>(Istream&, refinementHistory&);
-        friend Ostream& operator<<(Ostream&, const refinementHistory&);
+        friend Istream& operator>>(Istream&, refinementHistoryBalanced&);
+        friend Ostream& operator<<(Ostream&, const refinementHistoryBalanced&);
 };
 
 

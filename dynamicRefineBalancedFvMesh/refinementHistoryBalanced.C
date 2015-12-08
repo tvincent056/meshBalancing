@@ -24,7 +24,7 @@ License
 \*---------------------------------------------------------------------------*/
 
 #include "DynamicList.H"
-#include "refinementHistory.H"
+#include "refinementHistoryBalanced.H"
 #include "ListOps.H"
 #include "mapPolyMesh.H"
 #include "mapDistributePolyMesh.H"
@@ -35,14 +35,14 @@ License
 namespace Foam
 {
 
-defineTypeNameAndDebug(refinementHistory, 0);
+defineTypeNameAndDebug(refinementHistoryBalanced, 0);
 
 }
 
 
 // * * * * * * * * * * * * * Private Member Functions  * * * * * * * * * * * //
 
-void Foam::refinementHistory::writeEntry
+void Foam::refinementHistoryBalanced::writeEntry
 (
     const List<splitCell8>& splitCells,
     const splitCell8& split
@@ -74,7 +74,7 @@ void Foam::refinementHistory::writeEntry
 }
 
 
-void Foam::refinementHistory::writeDebug
+void Foam::refinementHistoryBalanced::writeDebug
 (
     const labelList& visibleCells,
     const List<splitCell8>& splitCells
@@ -109,7 +109,7 @@ void Foam::refinementHistory::writeDebug
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
 //- Construct null
-Foam::refinementHistory::splitCell8::splitCell8()
+Foam::refinementHistoryBalanced::splitCell8::splitCell8()
 :
     parent_(-1),
     addedCellsPtr_(NULL)
@@ -117,7 +117,7 @@ Foam::refinementHistory::splitCell8::splitCell8()
 
 
 //- Construct as child element of parent
-Foam::refinementHistory::splitCell8::splitCell8(const label parent)
+Foam::refinementHistoryBalanced::splitCell8::splitCell8(const label parent)
 :
     parent_(parent),
     addedCellsPtr_(NULL)
@@ -125,14 +125,14 @@ Foam::refinementHistory::splitCell8::splitCell8(const label parent)
 
 
 //- Construct from Istream
-Foam::refinementHistory::splitCell8::splitCell8(Istream& is)
+Foam::refinementHistoryBalanced::splitCell8::splitCell8(Istream& is)
 {
     is >> *this;
 }
 
 
 //- Construct as (deep) copy.
-Foam::refinementHistory::splitCell8::splitCell8(const splitCell8& sc)
+Foam::refinementHistoryBalanced::splitCell8::splitCell8(const splitCell8& sc)
 :
     parent_(sc.parent_),
     addedCellsPtr_
@@ -146,7 +146,7 @@ Foam::refinementHistory::splitCell8::splitCell8(const splitCell8& sc)
 
 // * * * * * * * * * * * * * * * Friend Operators  * * * * * * * * * * * * * //
 
-Foam::Istream& Foam::operator>>(Istream& is, refinementHistory::splitCell8& sc)
+Foam::Istream& Foam::operator>>(Istream& is, refinementHistoryBalanced::splitCell8& sc)
 {
     labelList addedCells;
 
@@ -168,7 +168,7 @@ Foam::Istream& Foam::operator>>(Istream& is, refinementHistory::splitCell8& sc)
 Foam::Ostream& Foam::operator<<
 (
     Ostream& os,
-    const refinementHistory::splitCell8& sc
+    const refinementHistoryBalanced::splitCell8& sc
 )
 {
     // Output as labelList so we can have 0 sized lists. Alternative is to
@@ -189,14 +189,14 @@ Foam::Ostream& Foam::operator<<
 }
 
 
-void Foam::refinementHistory::checkIndices() const
+void Foam::refinementHistoryBalanced::checkIndices() const
 {
     // Check indices.
     forAll(visibleCells_, i)
     {
         if (visibleCells_[i] < 0 && visibleCells_[i] >= splitCells_.size())
         {
-            FatalErrorIn("refinementHistory::checkIndices() const")
+            FatalErrorIn("refinementHistoryBalanced::checkIndices() const")
                 << "Illegal entry " << visibleCells_[i]
                 << " in visibleCells at location" << i << nl
                 << "It points outside the range of splitCells : 0.."
@@ -207,7 +207,7 @@ void Foam::refinementHistory::checkIndices() const
 }
 
 
-Foam::label Foam::refinementHistory::allocateSplitCell
+Foam::label Foam::refinementHistoryBalanced::allocateSplitCell
 (
     const label parent,
     const label i
@@ -251,7 +251,7 @@ Foam::label Foam::refinementHistory::allocateSplitCell
 }
 
 
-void Foam::refinementHistory::freeSplitCell(const label index)
+void Foam::refinementHistoryBalanced::freeSplitCell(const label index)
 {
     splitCell8& split = splitCells_[index];
 
@@ -269,7 +269,7 @@ void Foam::refinementHistory::freeSplitCell(const label index)
 
             if (myPos == -1)
             {
-                FatalErrorIn("refinementHistory::freeSplitCell")
+                FatalErrorIn("refinementHistoryBalanced::freeSplitCell")
                     << "Problem: cannot find myself in"
                     << " parents' children" << abort(FatalError);
             }
@@ -289,7 +289,7 @@ void Foam::refinementHistory::freeSplitCell(const label index)
 
 
 // Mark entry in splitCells. Recursively mark its parent and subs.
-void Foam::refinementHistory::markSplit
+void Foam::refinementHistoryBalanced::markSplit
 (
     const label index,
     labelList& oldToNew,
@@ -327,7 +327,7 @@ void Foam::refinementHistory::markSplit
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
-Foam::refinementHistory::refinementHistory(const IOobject& io)
+Foam::refinementHistoryBalanced::refinementHistoryBalanced(const IOobject& io)
 :
     regIOobject(io)
 {
@@ -336,7 +336,7 @@ Foam::refinementHistory::refinementHistory(const IOobject& io)
     {
         WarningIn
         (
-            "refinementHistory::refinementHistory(const IOobject&)"
+            "refinementHistoryBalanced::refinementHistoryBalanced(const IOobject&)"
         )   << "Specified IOobject::MUST_READ_IF_MODIFIED but class"
             << " does not support automatic rereading."
             << endl;
@@ -355,7 +355,7 @@ Foam::refinementHistory::refinementHistory(const IOobject& io)
 
     if (debug)
     {
-        Pout<< "refinementHistory::refinementHistory :"
+        Pout<< "refinementHistoryBalanced::refinementHistoryBalanced :"
             << " constructed history from IOobject :"
             << " splitCells:" << splitCells_.size()
             << " visibleCells:" << visibleCells_.size()
@@ -365,7 +365,7 @@ Foam::refinementHistory::refinementHistory(const IOobject& io)
 
 
 //- Read or construct
-Foam::refinementHistory::refinementHistory
+Foam::refinementHistoryBalanced::refinementHistoryBalanced
 (
     const IOobject& io,
     const List<splitCell8>& splitCells,
@@ -382,7 +382,7 @@ Foam::refinementHistory::refinementHistory
     {
         WarningIn
         (
-            "refinementHistory::refinementHistory"
+            "refinementHistoryBalanced::refinementHistoryBalanced"
             "(const IOobject&, const List<splitCell8>&, const labelList&)"
         )   << "Specified IOobject::MUST_READ_IF_MODIFIED but class"
             << " does not support automatic rereading."
@@ -405,7 +405,7 @@ Foam::refinementHistory::refinementHistory
 
     if (debug)
     {
-        Pout<< "refinementHistory::refinementHistory :"
+        Pout<< "refinementHistoryBalanced::refinementHistoryBalanced :"
             << " constructed history from IOobject or components :"
             << " splitCells:" << splitCells_.size()
             << " visibleCells:" << visibleCells_.size()
@@ -415,7 +415,7 @@ Foam::refinementHistory::refinementHistory
 
 
 // Construct from initial number of cells (all visible)
-Foam::refinementHistory::refinementHistory
+Foam::refinementHistoryBalanced::refinementHistoryBalanced
 (
     const IOobject& io,
     const label nCells
@@ -429,7 +429,7 @@ Foam::refinementHistory::refinementHistory
     {
         WarningIn
         (
-            "refinementHistory::refinementHistory"
+            "refinementHistoryBalanced::refinementHistoryBalanced"
             "(const IOobject&, const label)"
         )   << "Specified IOobject::MUST_READ_IF_MODIFIED but class"
             << " does not support automatic rereading."
@@ -463,7 +463,7 @@ Foam::refinementHistory::refinementHistory
 
     if (debug)
     {
-        Pout<< "refinementHistory::refinementHistory :"
+        Pout<< "refinementHistoryBalanced::refinementHistoryBalanced :"
             << " constructed history from IOobject or initial size :"
             << " splitCells:" << splitCells_.size()
             << " visibleCells:" << visibleCells_.size()
@@ -473,10 +473,10 @@ Foam::refinementHistory::refinementHistory
 
 
 // Construct as copy
-Foam::refinementHistory::refinementHistory
+Foam::refinementHistoryBalanced::refinementHistoryBalanced
 (
     const IOobject& io,
-    const refinementHistory& rh
+    const refinementHistoryBalanced& rh
 )
 :
     regIOobject(io),
@@ -486,14 +486,14 @@ Foam::refinementHistory::refinementHistory
 {
     if (debug)
     {
-        Pout<< "refinementHistory::refinementHistory : constructed initial"
+        Pout<< "refinementHistoryBalanced::refinementHistoryBalanced : constructed initial"
             << " history." << endl;
     }
 }
 
 
 // Construct from Istream
-Foam::refinementHistory::refinementHistory(const IOobject& io, Istream& is)
+Foam::refinementHistoryBalanced::refinementHistoryBalanced(const IOobject& io, Istream& is)
 :
     regIOobject(io),
     splitCells_(is),
@@ -505,7 +505,7 @@ Foam::refinementHistory::refinementHistory(const IOobject& io, Istream& is)
 
     if (debug)
     {
-        Pout<< "refinementHistory::refinementHistory :"
+        Pout<< "refinementHistoryBalanced::refinementHistoryBalanced :"
             << " constructed history from Istream"
             << " splitCells:" << splitCells_.size()
             << " visibleCells:" << visibleCells_.size()
@@ -516,13 +516,13 @@ Foam::refinementHistory::refinementHistory(const IOobject& io, Istream& is)
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-void Foam::refinementHistory::resize(const label size)
+void Foam::refinementHistoryBalanced::resize(const label size)
 {
     label oldSize = visibleCells_.size();
 
     if (debug)
     {
-        Pout<< "refinementHistory::resize from " << oldSize << " to " << size
+        Pout<< "refinementHistoryBalanced::resize from " << oldSize << " to " << size
             << " cells" << endl;
     }
 
@@ -536,7 +536,7 @@ void Foam::refinementHistory::resize(const label size)
 }
 
 
-void Foam::refinementHistory::updateMesh(const mapPolyMesh& map)
+void Foam::refinementHistoryBalanced::updateMesh(const mapPolyMesh& map)
 {
     if (active())
     {
@@ -557,7 +557,7 @@ void Foam::refinementHistory::updateMesh(const mapPolyMesh& map)
                 {
                     FatalErrorIn
                     (
-                        "refinementHistory::updateMesh(const mapPolyMesh&)"
+                        "refinementHistoryBalanced::updateMesh(const mapPolyMesh&)"
                     )   << "Problem" << abort(FatalError);
                 }
 
@@ -572,7 +572,7 @@ void Foam::refinementHistory::updateMesh(const mapPolyMesh& map)
 
         if (debug)
         {
-            Pout<< "refinementHistory::updateMesh : from "
+            Pout<< "refinementHistoryBalanced::updateMesh : from "
                 << visibleCells_.size()
                 << " to " << newVisibleCells.size()
                 << " cells" << endl;
@@ -584,7 +584,7 @@ void Foam::refinementHistory::updateMesh(const mapPolyMesh& map)
 
 
 // Update numbering for subsetting
-void Foam::refinementHistory::subset
+void Foam::refinementHistoryBalanced::subset
 (
     const labelList& pointMap,
     const labelList& faceMap,
@@ -606,7 +606,7 @@ void Foam::refinementHistory::subset
             {
                 FatalErrorIn
                 (
-                    "refinementHistory::subset"
+                    "refinementHistoryBalanced::subset"
                     "(const labelList&, const labelList&, const labelList&)"
                 )   << "Problem" << abort(FatalError);
             }
@@ -616,7 +616,7 @@ void Foam::refinementHistory::subset
 
         if (debug)
         {
-            Pout<< "refinementHistory::updateMesh : from "
+            Pout<< "refinementHistoryBalanced::updateMesh : from "
                 << visibleCells_.size()
                 << " to " << newVisibleCells.size()
                 << " cells" << endl;
@@ -627,7 +627,7 @@ void Foam::refinementHistory::subset
 }
 
 
-void Foam::refinementHistory::countProc
+void Foam::refinementHistoryBalanced::countProc
 (
     const label index,
     const label newProcNo,
@@ -669,13 +669,13 @@ void Foam::refinementHistory::countProc
 }
 
 
-void Foam::refinementHistory::distribute(const mapDistributePolyMesh& map)
+void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& map)
 {
     if (!active())
     {
         FatalErrorIn
         (
-            "refinementHistory::distribute(const mapDistributePolyMesh&)"
+            "refinementHistoryBalanced::distribute(const mapDistributePolyMesh&)"
         )   << "Calling distribute on inactive history" << abort(FatalError);
     }
 
@@ -720,7 +720,7 @@ void Foam::refinementHistory::distribute(const mapDistributePolyMesh& map)
         }
     }
 
-//Pout<< "refinementHistory::distribute :"
+//Pout<< "refinementHistoryBalanced::distribute :"
 //    << " destination:" << destination << endl;
 
     // Per splitCell entry the processor it moves to
@@ -744,10 +744,10 @@ void Foam::refinementHistory::distribute(const mapDistributePolyMesh& map)
         }
     }
 
-    //Pout<< "refinementHistory::distribute :"
+    //Pout<< "refinementHistoryBalanced::distribute :"
     //    << " splitCellProc:" << splitCellProc << endl;
     //
-    //Pout<< "refinementHistory::distribute :"
+    //Pout<< "refinementHistoryBalanced::distribute :"
     //    << " splitCellNum:" << splitCellNum << endl;
 
 
@@ -936,11 +936,11 @@ void Foam::refinementHistory::distribute(const mapDistributePolyMesh& map)
 }
 
 
-void Foam::refinementHistory::compact()
+void Foam::refinementHistoryBalanced::compact()
 {
     if (debug)
     {
-        Pout<< "refinementHistory::compact() Entering with:"
+        Pout<< "refinementHistoryBalanced::compact() Entering with:"
             << " freeSplitCells_:" << freeSplitCells_.size()
             << " splitCells_:" << splitCells_.size()
             << " visibleCells_:" << visibleCells_.size()
@@ -953,7 +953,7 @@ void Foam::refinementHistory::compact()
 
             if (splitCells_[index].parent_ != -2)
             {
-                FatalErrorIn("refinementHistory::compact()")
+                FatalErrorIn("refinementHistoryBalanced::compact()")
                     << "Problem index:" << index
                     << abort(FatalError);
             }
@@ -968,7 +968,7 @@ void Foam::refinementHistory::compact()
              && splitCells_[visibleCells_[cellI]].parent_ == -2
             )
             {
-                FatalErrorIn("refinementHistory::compact()")
+                FatalErrorIn("refinementHistoryBalanced::compact()")
                     << "Problem : visible cell:" << cellI
                     << " is marked as being free." << abort(FatalError);
             }
@@ -1055,7 +1055,7 @@ void Foam::refinementHistory::compact()
 
     if (debug)
     {
-        Pout<< "refinementHistory::compact : compacted splitCells from "
+        Pout<< "refinementHistoryBalanced::compact : compacted splitCells from "
             << splitCells_.size() << " to " << newSplitCells.size() << endl;
     }
 
@@ -1065,7 +1065,7 @@ void Foam::refinementHistory::compact()
 
     if (debug)
     {
-        Pout<< "refinementHistory::compact() NOW:"
+        Pout<< "refinementHistoryBalanced::compact() NOW:"
             << " freeSplitCells_:" << freeSplitCells_.size()
             << " splitCells_:" << splitCells_.size()
             << " newSplitCells:" << newSplitCells.size()
@@ -1092,13 +1092,13 @@ void Foam::refinementHistory::compact()
 }
 
 
-void Foam::refinementHistory::writeDebug() const
+void Foam::refinementHistoryBalanced::writeDebug() const
 {
     writeDebug(visibleCells_, splitCells_);
 }
 
 
-void Foam::refinementHistory::storeSplit
+void Foam::refinementHistoryBalanced::storeSplit
 (
     const label cellI,
     const labelList& addedCells
@@ -1136,7 +1136,7 @@ void Foam::refinementHistory::storeSplit
 }
 
 
-void Foam::refinementHistory::combineCells
+void Foam::refinementHistoryBalanced::combineCells
 (
     const label masterCellI,
     const labelList& combinedCells
@@ -1160,14 +1160,14 @@ void Foam::refinementHistory::combineCells
 }
 
 
-bool Foam::refinementHistory::readData(Istream& is)
+bool Foam::refinementHistoryBalanced::readData(Istream& is)
 {
     is >> *this;
     return !is.bad();
 }
 
 
-bool Foam::refinementHistory::writeData(Ostream& os) const
+bool Foam::refinementHistoryBalanced::writeData(Ostream& os) const
 {
     os << *this;
 
@@ -1177,7 +1177,7 @@ bool Foam::refinementHistory::writeData(Ostream& os) const
 
 // * * * * * * * * * * * * * * * Friend Operators  * * * * * * * * * * * * * //
 
-Foam::Istream& Foam::operator>>(Istream& is, refinementHistory& rh)
+Foam::Istream& Foam::operator>>(Istream& is, refinementHistoryBalanced& rh)
 {
     rh.freeSplitCells_.clearStorage();
 
@@ -1190,9 +1190,9 @@ Foam::Istream& Foam::operator>>(Istream& is, refinementHistory& rh)
 }
 
 
-Foam::Ostream& Foam::operator<<(Ostream& os, const refinementHistory& rh)
+Foam::Ostream& Foam::operator<<(Ostream& os, const refinementHistoryBalanced& rh)
 {
-    const_cast<refinementHistory&>(rh).compact();
+    const_cast<refinementHistoryBalanced&>(rh).compact();
 
     return os   << "// splitCells" << nl
                 << rh.splitCells_ << nl
