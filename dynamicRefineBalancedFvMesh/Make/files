@@ -1,3 +1,5 @@
+refinementHistoryBalanced.C
+hexRef8Balanced.C
 dynamicRefineBalancedFvMesh.C
 
 LIB = $(FOAM_USER_LIBBIN)/libdynamicFvMesh-dev
