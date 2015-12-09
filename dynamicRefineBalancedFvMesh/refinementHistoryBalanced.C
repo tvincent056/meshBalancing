@@ -29,6 +29,9 @@ License
 #include "mapPolyMesh.H"
 #include "mapDistributePolyMesh.H"
 #include "polyMesh.H"
+#include "IPstream.H"
+#include "OPstream.H"
+#include "PstreamReduceOps.H"
 
 // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
 
@@ -51,26 +54,36 @@ void Foam::refinementHistoryBalanced::writeEntry
     // Write me:
     if (split.addedCellsPtr_.valid())
     {
-        Pout<< "parent:" << split.parent_
+        Pout<< "parentProc:" << split.parent_.proc()
+            << "parentIndex:" << split.parent_.index()
             << " subCells:" << split.addedCellsPtr_()
             << endl;
     }
     else
     {
-        Pout<< "parent:" << split.parent_
+        Pout<< "parentProc:" << split.parent_.proc()
+            << "parentIndex:" << split.parent_.index()
             << " no subcells"
             << endl;
     }
 
-    if (split.parent_ >= 0)
+    if (split.parent_.index() >= 0)
     {
-        Pout<< "parent data:" << endl;
-        // Write my parent
-        string oldPrefix = Pout.prefix();
-        Pout.prefix() = "  " + oldPrefix;
-        writeEntry(splitCells, splitCells[split.parent_]);
-        Pout.prefix() = oldPrefix;
+        if (split.parent_.proc() == Pstream::myProcNo())
+        {
+            Pout<< "parent data:" << endl;
+            // Write my parent
+            string oldPrefix = Pout.prefix();
+            Pout.prefix() = "  " + oldPrefix;
+            writeEntry(splitCells, splitCells[split.parent_.index()]);
+            Pout.prefix() = oldPrefix;
+        }
+        else
+        {
+            //TODO: use gather/scatter to complete the tree
+        }
     }
+    
 }
 
 
@@ -108,10 +121,25 @@ void Foam::refinementHistoryBalanced::writeDebug
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
+Foam::refinementHistoryBalanced::procIndexPair::procIndexPair()
+:
+	pair_(Pstream::myProcNo(),-1)
+{}
+
+Foam::refinementHistoryBalanced::procIndexPair::procIndexPair(label proc, label index)
+:
+	pair_(proc,index)
+{}
+
+Foam::refinementHistoryBalanced::procIndexPair::procIndexPair(Istream& is)
+:
+	pair_(is)
+{}
+
 //- Construct null
 Foam::refinementHistoryBalanced::splitCell8::splitCell8()
 :
-    parent_(-1),
+    parent_(Pstream::myProcNo(),-1),
     addedCellsPtr_(NULL)
 {}
 
@@ -119,7 +147,14 @@ Foam::refinementHistoryBalanced::splitCell8::splitCell8()
 //- Construct as child element of parent
 Foam::refinementHistoryBalanced::splitCell8::splitCell8(const label parent)
 :
-    parent_(parent),
+    parent_(Pstream::myProcNo(),parent),
+    addedCellsPtr_(NULL)
+{}
+
+//- Construct as child element of parent
+Foam::refinementHistoryBalanced::splitCell8::splitCell8(const label parentProc, const label parent)
+:
+    parent_(parentProc,parent),
     addedCellsPtr_(NULL)
 {}
 
@@ -138,7 +173,7 @@ Foam::refinementHistoryBalanced::splitCell8::splitCell8(const splitCell8& sc)
     addedCellsPtr_
     (
         sc.addedCellsPtr_.valid()
-      ? new FixedList<label, 8>(sc.addedCellsPtr_())
+      ? new FixedList<procIndexPair, 8>(sc.addedCellsPtr_())
       : NULL
     )
 {}
@@ -148,13 +183,13 @@ Foam::refinementHistoryBalanced::splitCell8::splitCell8(const splitCell8& sc)
 
 Foam::Istream& Foam::operator>>(Istream& is, refinementHistoryBalanced::splitCell8& sc)
 {
-    labelList addedCells;
+    List<refinementHistoryBalanced::procIndexPair> addedCells;
 
     is >> sc.parent_ >> addedCells;
 
     if (addedCells.size())
     {
-        sc.addedCellsPtr_.reset(new FixedList<label, 8>(addedCells));
+        sc.addedCellsPtr_.reset(new FixedList<refinementHistoryBalanced::procIndexPair, 8>(addedCells));
     }
     else
     {
@@ -180,14 +215,25 @@ Foam::Ostream& Foam::operator<<
         return os
             << sc.parent_
             << token::SPACE
-            << labelList(sc.addedCellsPtr_());
+            << List<refinementHistoryBalanced::procIndexPair>(sc.addedCellsPtr_());
     }
     else
     {
-        return os << sc.parent_ << token::SPACE << labelList(0);
+        return os << sc.parent_ << token::SPACE
+        		<< List<refinementHistoryBalanced::procIndexPair>(0);
     }
 }
 
+Foam::Istream& Foam::operator>>(Istream& is, refinementHistoryBalanced::procIndexPair& pair)
+{
+    return is >> pair.pair_;
+}
+
+
+Foam::Ostream& Foam::operator<<(Ostream& os, const refinementHistoryBalanced::procIndexPair& pair)
+{
+    return os << pair.pair_;
+}
 
 void Foam::refinementHistoryBalanced::checkIndices() const
 {
@@ -237,14 +283,14 @@ Foam::label Foam::refinementHistoryBalanced::allocateSplitCell
         if (parentSplit.addedCellsPtr_.empty())
         {
             // Allocate storage on parent for the 8 subcells.
-            parentSplit.addedCellsPtr_.reset(new FixedList<label, 8>(-1));
+            parentSplit.addedCellsPtr_.reset(new FixedList<procIndexPair, 8>(procIndexPair(-1,-1)));
         }
 
 
         // Store me on my parent
-        FixedList<label, 8>& parentSplits = parentSplit.addedCellsPtr_();
+        FixedList<procIndexPair, 8>& parentSplits = parentSplit.addedCellsPtr_();
 
-        parentSplits[i] = index;
+        parentSplits[i] = procIndexPair(Pstream::myProcNo(),index);
     }
 
     return index;
@@ -256,16 +302,17 @@ void Foam::refinementHistoryBalanced::freeSplitCell(const label index)
     splitCell8& split = splitCells_[index];
 
     // Make sure parent does not point to me anymore.
-    if (split.parent_ >= 0)
+    if (split.parent_.index() >= 0)
     {
-        autoPtr<FixedList<label, 8> >& subCellsPtr =
-            splitCells_[split.parent_].addedCellsPtr_;
+
+        autoPtr<FixedList<procIndexPair, 8> >& subCellsPtr =
+            splitCells_[split.parent_.index()].addedCellsPtr_;
 
         if (subCellsPtr.valid())
         {
-            FixedList<label, 8>& subCells = subCellsPtr();
+            FixedList<procIndexPair, 8>& subCells = subCellsPtr();
 
-            label myPos = findIndex(subCells, index);
+            label myPos = findIndex(subCells, procIndexPair(Pstream::myProcNo(),index));
 
             if (myPos == -1)
             {
@@ -275,18 +322,17 @@ void Foam::refinementHistoryBalanced::freeSplitCell(const label index)
             }
             else
             {
-                subCells[myPos] = -1;
+                subCells[myPos] = procIndexPair(-1,-1);
             }
         }
     }
 
     // Mark splitCell as free
-    split.parent_ = -2;
+    split.parent_.index()= -2;
 
     // Add to cache of free splitCells
     freeSplitCells_.append(index);
 }
-
 
 // Mark entry in splitCells. Recursively mark its parent and subs.
 void Foam::refinementHistoryBalanced::markSplit
@@ -305,22 +351,77 @@ void Foam::refinementHistoryBalanced::markSplit
         oldToNew[index] = newSplitCells.size();
         newSplitCells.append(split);
 
-        if (split.parent_ >= 0)
+        if (split.parent_.index() >= 0)
         {
-            markSplit(split.parent_, oldToNew, newSplitCells);
+            markSplit(split.parent_.index(), oldToNew, newSplitCells);
         }
         if (split.addedCellsPtr_.valid())
         {
-            const FixedList<label, 8>& splits = split.addedCellsPtr_();
+            const FixedList<procIndexPair, 8>& splits = split.addedCellsPtr_();
 
             forAll(splits, i)
             {
-                if (splits[i] >= 0)
+                if (splits[i].index() >= 0)
                 {
-                    markSplit(splits[i], oldToNew, newSplitCells);
+                    markSplit(splits[i].index(), oldToNew, newSplitCells);
                 }
             }
         }
+    }
+}
+
+void Foam::refinementHistoryBalanced::parallelMarkSplits
+(
+	boolListList& marked,
+    labelList& oldToNew,
+    DynamicList<splitCell8>& newSplitCells
+) const
+{
+    //Loop until marking is complete
+    bool complete = false;
+    while(!complete)
+    {
+    	complete = true;
+    	forAll (marked[Pstream::myProcNo()], index)
+		{
+    		if (marked[Pstream::myProcNo()][index] && oldToNew[index] == -1)
+    		{
+    	        // Not yet compacted.
+    			complete = false;
+
+    	        const splitCell8& split = splitCells_[index];
+
+    	        oldToNew[index] = newSplitCells.size();
+    	        newSplitCells.append(split);
+
+    	        if (split.parent_.index() >= 0)
+    	        {
+    	            //markSplit(split.parent_, oldToNew, newSplitCells);
+    	        	marked[split.parent_.proc()][split.parent_.index()] = true;
+    	        }
+    	        if (split.addedCellsPtr_.valid())
+    	        {
+    	            const FixedList<procIndexPair, 8>& splits = split.addedCellsPtr_();
+
+    	            forAll(splits, i)
+    	            {
+    	                if (splits[i].index() >= 0)
+    	                {
+    	                    //markSplit(splits[i], oldToNew, newSplitCells);
+    	                	marked[splits[i].proc()][splits[i].index()] = true;
+    	                }
+    	            }
+    	        }
+    		}
+    	}
+
+    	forAll(marked, procI)
+    	{
+    	    Pstream::listCombineGather(marked[procI],orEqOp<bool>());
+    	    Pstream::listCombineScatter(marked[procI]);
+    	}
+
+    	reduce(complete,andOp<bool>());
     }
 }
 
@@ -658,7 +759,7 @@ void Foam::refinementHistoryBalanced::countProc
                     << endl;
             }
 
-            label parent = splitCells_[index].parent_;
+            label parent = splitCells_[index].parent_.index();
 
             if (parent >= 0)
             {
@@ -668,6 +769,47 @@ void Foam::refinementHistoryBalanced::countProc
     }
 }
 
+void Foam::refinementHistoryBalanced::parallelCountProc
+(
+	const label index,
+	const label newProcNo,
+    labelListList& splitCellNum
+)
+{
+	if(index >= 0)
+	{
+		label parentIndex = splitCells_[index].parent_.index();
+		if (parentIndex >= 0)
+		{
+			label parentProc = splitCells_[index].parent_.proc();
+
+			if(parentProc != newProcNo)
+				splitCellNum[parentProc][parentIndex]++;
+		}
+	}
+}
+
+void Foam::refinementHistoryBalanced::parallelAddProc
+(
+	const label index,
+	const label newProcNo,
+	labelListList& splitCellProc,
+	const labelListList& splitCellNum,
+	DynamicList<procIndexPair>& parents
+)
+{
+	label parentIndex = splitCells_[index].parent_.index();
+	label parentProc = splitCells_[index].parent_.proc();
+	if (parentIndex >= 0 && parentProc == Pstream::myProcNo())
+	{
+		if(splitCellNum[parentProc][parentIndex] == 8
+				&& splitCellProc[parentProc][parentIndex] == parentProc)
+		{
+			splitCellProc[parentProc][parentIndex] = newProcNo;
+			parents.append(procIndexPair(newProcNo,parentIndex));
+		}
+	}
+}
 
 void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& map)
 {
@@ -724,25 +866,116 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 //    << " destination:" << destination << endl;
 
     // Per splitCell entry the processor it moves to
-    labelList splitCellProc(splitCells_.size(), -1);
-    // Per splitCell entry the number of live cells that move to that processor
-    labelList splitCellNum(splitCells_.size(), 0);
+    labelListList splitCellProc(Pstream::nProcs());
+	splitCellProc[Pstream::myProcNo()] = labelList(splitCells_.size(), Pstream::myProcNo());
+//    Pstream::gatherList(splitCellProc);
+//    Pstream::scatterList(splitCellProc);
 
-    forAll(visibleCells_, cellI)
-    {
-        label index = visibleCells_[cellI];
+    // Per splitCell entry the number of live cells that are off the processor
+    // (we need to relocate the splitCell if none off its live cells are on this processor)
+    labelListList splitCellNum(Pstream::nProcs());
+    splitCellNum[Pstream::myProcNo()] = labelList(splitCells_.size(), 0);
 
-        if (index >= 0)
-        {
-            countProc
-            (
-                splitCells_[index].parent_,
-                destination[cellI],
-                splitCellProc,
-                splitCellNum
-            );
-        }
+    //Debug
+//    labelList splitCellsSize(Pstream::nProcs());
+//    splitCellsSize[Pstream::myProcNo()] = splitCells_.size();
+//    Pstream::gatherList(splitCellsSize);
+//    Info << "splitCells.size() = " << splitCellsSize << endl;
+//    labelListList allVisibleCells(Pstream::nProcs());
+//    allVisibleCells[Pstream::myProcNo()] = visibleCells_;
+//    Pstream::gatherList(allVisibleCells);
+//    Info << "visibleCells" << allVisibleCells << endl;
+
+    Pstream::gatherList(splitCellNum);
+    Pstream::scatterList(splitCellNum);
+
+//    Info << "splitCellNum = " << splitCellNum << endl;
+
+    // Per processor, pairs of local splitCell indices and destination processors
+    DynamicList<procIndexPair> parents;
+
+	forAll(visibleCells_, cellI)
+	{
+		label index = visibleCells_[cellI];
+		parallelCountProc(index, destination[cellI], splitCellNum);
+	}
+
+	forAll(splitCellNum,procI)
+	{
+		Pstream::listCombineGather(splitCellNum[procI],plusEqOp<label>());
+		Pstream::listCombineScatter(splitCellNum[procI]);
+	}
+
+//	Info << "splitCellNum = " << splitCellNum << endl;
+
+	forAll(visibleCells_, cellI)
+	{
+		label index = visibleCells_[cellI];
+		if(index >= 0)
+		{
+			splitCellProc[Pstream::myProcNo()][index] = destination[cellI];
+			parallelAddProc(index, destination[cellI], splitCellProc, splitCellNum, parents);
+		}
+	}
+
+	parents.shrink();
+
+	bool complete = parents.size() > 0;
+	reduce(complete, andOp<bool>());
+
+	if(debug)
+	{
+		labelList parentsSize(Pstream::nProcs());
+		parentsSize[Pstream::myProcNo()] = parents.size();
+		Pstream::gatherList(parentsSize);
+		Info << "parents.size() = " << parentsSize << endl;
+	}
+
+	while(!complete)
+	{
+
+//		for (label procI = 0; procI < Pstream::nProcs(); procI++)
+//		{
+//	        // Send to neighbors
+//	        OPstream toNbr(Pstream::blocking, procI);
+//	        toNbr << parents[procI];
+//	        parents[procI].clear();
+//		}
+//
+//		for (label procI = 0; procI < Pstream::nProcs(); procI++)
+//		{
+//			// Receive from neighbors
+//	        IPstream fromNbr(Pstream::blocking, procI);
+//	        DynamicList<procIndexPair> newParents(fromNbr);
+//	        parents[Pstream::myProcNo()].append(newParents);
+//		}
+
+		complete = true;
+		forAll(parents,i)
+		{
+			complete = false;
+			procIndexPair& parent = parents[i];
+			parallelCountProc(parent.index(), parent.proc(), splitCellNum);
+		}
+
+		forAll(splitCellNum,procI)
+		{
+			Pstream::listCombineGather(splitCellNum[procI],plusEqOp<label>());
+			Pstream::listCombineScatter(splitCellNum[procI]);
+		}
+
+		while(parents.size() > 0)
+		{
+			complete = false;
+			procIndexPair parent = parents.remove();
+			parallelAddProc(parent.index(), parent.proc(), splitCellProc, splitCellNum, parents);
+		}
+
+		reduce(complete, andOp<bool>());
     }
+
+	Pstream::gatherList(splitCellProc);
+	Pstream::scatterList(splitCellProc);
 
     //Pout<< "refinementHistoryBalanced::distribute :"
     //    << " splitCellProc:" << splitCellProc << endl;
@@ -753,19 +986,15 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 
     // Create subsetted refinement tree consisting of all parents that
     // move in their whole to other processor.
+	List< DynamicList<splitCell8> > newSplitCells(Pstream::nProcs());
+	labelListList oldToNew(Pstream::nProcs());
+	oldToNew[Pstream::myProcNo()] = labelList(splitCells_.size(), -1);
+
     for (label procI = 0; procI < Pstream::nProcs(); procI++)
     {
         //Pout<< "-- Subetting for processor " << procI << endl;
 
-        // From uncompacted to compacted splitCells.
-        labelList oldToNew(splitCells_.size(), -1);
-
-        // Compacted splitCells. Similar to subset routine below.
-        DynamicList<splitCell8> newSplitCells(splitCells_.size());
-
-        // Loop over all entries. Note: could recurse like countProc so only
-        // visit used entries but is probably not worth it.
-
+        // Loop over all entries.
         forAll(splitCells_, index)
         {
 //            Pout<< "oldCell:" << index
@@ -773,11 +1002,11 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 //                << " nCells:" << splitCellNum[index]
 //                << endl;
 
-            if (splitCellProc[index] == procI && splitCellNum[index] == 8)
+            if (splitCellProc[Pstream::myProcNo()][index] == procI)
             {
-                // Entry moves in its whole to procI
-                oldToNew[index] = newSplitCells.size();
-                newSplitCells.append(splitCells_[index]);
+                // Entry moves to procI
+                oldToNew[Pstream::myProcNo()][index] = newSplitCells[procI].size();
+                newSplitCells[procI].append(splitCells_[index]);
 
                 //Pout<< "Added oldCell " << index
                 //    << " info " << newSplitCells.last()
@@ -786,56 +1015,67 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
             }
         }
 
-        // Add live cells that are subsetted.
-        forAll(visibleCells_, cellI)
-        {
-            label index = visibleCells_[cellI];
+        newSplitCells[procI].shrink();
+    }
 
-            if (index >= 0 && destination[cellI] == procI)
-            {
-                label parent = splitCells_[index].parent_;
+    forAll(newSplitCells,procI)
+    {
 
-                //Pout<< "Adding refined cell " << cellI
-                //    << " since moves to "
-                //    << procI << " old parent:" << parent << endl;
+    	labelList size(Pstream::nProcs());
+    	size[Pstream::myProcNo()] = newSplitCells[procI].size();
+    	Pstream::gatherList(size);
+    	Pstream::scatterList(size);
 
-                // Create new splitCell with parent
-                oldToNew[index] = newSplitCells.size();
-                newSplitCells.append(splitCell8(parent));
-            }
-        }
+		label indexOffset = 0;
+		for(label procIJ = 0; procIJ < Pstream::myProcNo(); procIJ++)
+		{
+			indexOffset += size[procIJ];
+		}
 
-        //forAll(oldToNew, index)
-        //{
-        //    Pout<< "old:" << index << " new:" << oldToNew[index]
-        //        << endl;
-        //}
+		forAll(oldToNew[Pstream::myProcNo()], index)
+		{
+			if(splitCellProc[Pstream::myProcNo()][index] == procI)
+				oldToNew[Pstream::myProcNo()][index] += indexOffset;
+		}
+    }
 
-        newSplitCells.shrink();
+	Pstream::gatherList(oldToNew);
+	Pstream::scatterList(oldToNew);
 
-        // Renumber contents of newSplitCells
-        forAll(newSplitCells, index)
-        {
-            splitCell8& split = newSplitCells[index];
+	forAll(newSplitCells,procI)
+	{
+    	forAll(newSplitCells[procI],index)
+    	{
+    		splitCell8& split = newSplitCells[procI][index];
+    		label oldParentIndex = split.parent_.index();
+    		label oldParentProc = split.parent_.proc();
+    		if(oldParentIndex >= 0)
+    		{
+    			split.parent_.index() = oldToNew[oldParentProc][oldParentIndex];
+    			split.parent_.proc() = splitCellProc[oldParentProc][oldParentIndex];
+    		}
 
-            if (split.parent_ >= 0)
-            {
-                split.parent_ = oldToNew[split.parent_];
-            }
             if (split.addedCellsPtr_.valid())
             {
-                FixedList<label, 8>& splits = split.addedCellsPtr_();
+            	//Update sub cell entries
+                FixedList<procIndexPair, 8>& splits = split.addedCellsPtr_();
 
                 forAll(splits, i)
                 {
-                    if (splits[i] >= 0)
+                    if (splits[i].index() >= 0)
                     {
-                        splits[i] = oldToNew[splits[i]];
+                    	label oldSplitProc = splits[i].proc();
+                    	label oldSplitIndex = splits[i].index();
+                    	splits[i].proc() = splitCellProc[oldSplitProc][oldSplitIndex];
+                        splits[i].index() = oldToNew[oldSplitProc][oldSplitIndex];
                     }
                 }
             }
-        }
+    	}
+    }
 
+    for (label procI = 0; procI < Pstream::nProcs(); procI++)
+    {
 
         const labelList& subMap = subCellMap[procI];
 
@@ -848,9 +1088,9 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 
             label oldIndex = visibleCells_[oldCellI];
 
-            if (oldIndex >= 0)
+            if (oldIndex >= 0) //if it has a splitCell
             {
-                newVisibleCells[newCellI] = oldToNew[oldIndex];
+                newVisibleCells[newCellI] = oldToNew[Pstream::myProcNo()][oldIndex];
             }
         }
 
@@ -861,7 +1101,7 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 
         // Send to neighbours
         OPstream toNbr(Pstream::blocking, procI);
-        toNbr << newSplitCells << newVisibleCells;
+        toNbr << newSplitCells[procI] << newVisibleCells;
     }
 
 
@@ -887,35 +1127,39 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 
         // newSplitCells contain indices only into newSplitCells so
         // renumbering can be done here.
-        label offset = splitCells_.size();
+//        label offset = splitCells_.size();
 
         //Pout<< "**Renumbering data from proc " << procI << " with offset "
         //    << offset << endl;
 
-        forAll(newSplitCells, index)
-        {
-            splitCell8& split = newSplitCells[index];
+//        //Need to do this before we communicate because parents may be off processor
+//        forAll(newSplitCells, index)
+//        {
+//            splitCell8& split = newSplitCells[index];
+//
+//            if (split.parent_.index()>= 0)
+//            {
+//                split.parent_.index()+= offset;
+//            }
+//            if (split.addedCellsPtr_.valid())
+//            {
+//                FixedList<procIndexPair, 8>& splits = split.addedCellsPtr_();
+//
+//                forAll(splits, i)
+//                {
+//                    if (splits[i].index() >= 0)
+//                    {
+//                        splits[i].index() += offset;
+//                    }
+//                }
+//            }
+//
+//            splitCells_.append(split);
+//        }
 
-            if (split.parent_ >= 0)
-            {
-                split.parent_ += offset;
-            }
-            if (split.addedCellsPtr_.valid())
-            {
-                FixedList<label, 8>& splits = split.addedCellsPtr_();
+        splitCells_.append(newSplitCells);
 
-                forAll(splits, i)
-                {
-                    if (splits[i] >= 0)
-                    {
-                        splits[i] += offset;
-                    }
-                }
-            }
-
-            splitCells_.append(split);
-        }
-
+//        Info << "Debug point at " << __FILE__ << ':' << __LINE__ << endl;
 
         // Combine visibleCell.
         const labelList& constructMap = map.cellMap().constructMap()[procI];
@@ -924,17 +1168,18 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
         {
             if (newVisibleCells[i] >= 0)
             {
-                visibleCells_[constructMap[i]] = newVisibleCells[i] + offset;
+                visibleCells_[constructMap[i]] = newVisibleCells[i];
             }
         }
     }
     splitCells_.shrink();
 
+//    Info << "Debug point at " << __FILE__ << ':' << __LINE__ << endl;
+
     //Pout<< nl << "--AFTER:" << endl;
     //writeDebug();
     //Pout<< "---------" << nl << endl;
 }
-
 
 void Foam::refinementHistoryBalanced::compact()
 {
@@ -951,7 +1196,7 @@ void Foam::refinementHistoryBalanced::compact()
         {
             label index = freeSplitCells_[i];
 
-            if (splitCells_[index].parent_ != -2)
+            if (splitCells_[index].parent_.index() != -2)
             {
                 FatalErrorIn("refinementHistoryBalanced::compact()")
                     << "Problem index:" << index
@@ -965,7 +1210,7 @@ void Foam::refinementHistoryBalanced::compact()
             if
             (
                 visibleCells_[cellI] >= 0
-             && splitCells_[visibleCells_[cellI]].parent_ == -2
+             && splitCells_[visibleCells_[cellI]].parent_.index() == -2
             )
             {
                 FatalErrorIn("refinementHistoryBalanced::compact()")
@@ -974,6 +1219,8 @@ void Foam::refinementHistoryBalanced::compact()
             }
         }
     }
+
+//    Info << "Debug point at " << __FILE__ << ':' << __LINE__ << endl;
 
     DynamicList<splitCell8> newSplitCells(splitCells_.size());
 
@@ -984,6 +1231,10 @@ void Foam::refinementHistoryBalanced::compact()
     // or indexed from other splitCell entries.
 
     // Mark from visibleCells
+
+    boolListList marked(Pstream::nProcs());
+    marked[Pstream::myProcNo()] = boolList(splitCells_.size(),false);
+
     forAll(visibleCells_, cellI)
     {
         label index = visibleCells_[cellI];
@@ -994,25 +1245,33 @@ void Foam::refinementHistoryBalanced::compact()
             // parent or subsplits.
             if
             (
-                splitCells_[index].parent_ != -1
+                splitCells_[index].parent_.index() != -1
              || splitCells_[index].addedCellsPtr_.valid()
             )
             {
-                markSplit(index, oldToNew, newSplitCells);
+                //markSplit(index, oldToNew, newSplitCells);
+            	marked[Pstream::myProcNo()][index] = true;
             }
         }
     }
 
+    Pstream::gatherList(marked);
+    Pstream::scatterList(marked);
+
+//    Info << "Debug point at " << __FILE__ << ':' << __LINE__ << endl;
+
+    parallelMarkSplits(marked, oldToNew, newSplitCells);
+
     // Mark from splitCells
     forAll(splitCells_, index)
     {
-        if (splitCells_[index].parent_ == -2)
+        if (splitCells_[index].parent_.index() == -2)
         {
             // freed cell.
         }
         else if
         (
-            splitCells_[index].parent_ == -1
+            splitCells_[index].parent_.index() == -1
          && splitCells_[index].addedCellsPtr_.empty()
         )
         {
@@ -1022,31 +1281,40 @@ void Foam::refinementHistoryBalanced::compact()
         else
         {
             // Is used element.
-            markSplit(index, oldToNew, newSplitCells);
+            //markSplit(index, oldToNew, newSplitCells);
+        	marked[Pstream::myProcNo()][index] = true;
         }
     }
 
+    Pstream::gatherList(marked);
+    Pstream::scatterList(marked);
+
+    parallelMarkSplits(marked, oldToNew, newSplitCells);
 
     // Now oldToNew is fully complete and compacted elements are in
     // newSplitCells.
     // Renumber contents of newSplitCells and visibleCells.
+    labelListList allOldToNew(Pstream::nProcs());
+    allOldToNew[Pstream::myProcNo()] = oldToNew;
+    Pstream::gatherList(allOldToNew);
+    Pstream::scatterList(allOldToNew);
     forAll(newSplitCells, index)
     {
         splitCell8& split = newSplitCells[index];
 
-        if (split.parent_ >= 0)
+        if (split.parent_.index() >= 0)
         {
-            split.parent_ = oldToNew[split.parent_];
+            split.parent_.index() = allOldToNew[split.parent_.proc()][split.parent_.index()];
         }
         if (split.addedCellsPtr_.valid())
         {
-            FixedList<label, 8>& splits = split.addedCellsPtr_();
+            FixedList<procIndexPair, 8>& splits = split.addedCellsPtr_();
 
             forAll(splits, i)
             {
-                if (splits[i] >= 0)
+                if (splits[i].index() >= 0)
                 {
-                    splits[i] = oldToNew[splits[i]];
+                    splits[i].index() = allOldToNew[splits[i].proc()][splits[i].index()];
                 }
             }
         }
@@ -1143,7 +1411,8 @@ void Foam::refinementHistoryBalanced::combineCells
 )
 {
     // Save the parent structure
-    label parentIndex = splitCells_[visibleCells_[masterCellI]].parent_;
+    label parentIndex = splitCells_[visibleCells_[masterCellI]].parent_.index();
+	label parentProc = splitCells_[visibleCells_[masterCellI]].parent_.proc();
 
     // Remove the information for the combined cells
     forAll(combinedCells, i)
@@ -1154,9 +1423,12 @@ void Foam::refinementHistoryBalanced::combineCells
         visibleCells_[cellI] = -1;
     }
 
-    splitCell8& parentSplit = splitCells_[parentIndex];
-    parentSplit.addedCellsPtr_.reset(NULL);
-    visibleCells_[masterCellI] = parentIndex;
+    if (parentProc == Pstream::myProcNo())
+    {
+		splitCell8& parentSplit = splitCells_[parentIndex];
+		parentSplit.addedCellsPtr_.reset(NULL);
+		visibleCells_[masterCellI] = parentIndex;
+    }
 }
 
 

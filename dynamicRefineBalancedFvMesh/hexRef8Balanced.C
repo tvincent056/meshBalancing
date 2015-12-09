@@ -43,6 +43,7 @@ License
 #include "refinementData.H"
 #include "refinementDistanceData.H"
 #include "degenerateMatcher.H"
+#include "processorFvPatch.H"
 
 // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
 
@@ -4641,6 +4642,8 @@ void Foam::hexRef8Balanced::distribute(const mapDistributePolyMesh& map)
         history_.distribute(map);
     }
 
+//    Info << "Debug point at " << __FILE__ << ':' << __LINE__ << endl;
+
     // Update face removal engine
     faceRemover_.distribute(map);
 
@@ -5236,9 +5239,9 @@ Foam::labelList Foam::hexRef8Balanced::getSplitPoints() const
     {
         const labelList& cPoints = mesh_.cellPoints(cellI);
 
-        if (visibleCells[cellI] != -1 && history_.parentIndex(cellI) >= 0)
+        if (visibleCells[cellI] != -1 && history_.parent(cellI).index() >= 0)
         {
-            label parentIndex = history_.parentIndex(cellI);
+            label parentIndex = history_.parent(cellI).index();
 
             // Check same master.
             forAll(cPoints, i)
@@ -5328,6 +5331,172 @@ Foam::labelList Foam::hexRef8Balanced::getSplitPoints() const
     return splitPoints;
 }
 
+Foam::labelList Foam::hexRef8Balanced::getProcBoundarySplitPoints() const
+{
+    if (debug)
+    {
+        checkRefinementLevels(-1, labelList(0));
+    }
+
+    if (debug)
+    {
+        Pout<< "hexRef8Balanced::getSplitPoints :"
+            << " Calculating unrefineable points" << endl;
+    }
+
+
+    if (!history_.active())
+    {
+        FatalErrorIn("hexRef8Balanced::getSplitPoints()")
+            << "Only call if constructed with history capability"
+            << abort(FatalError);
+    }
+
+    // Master cell
+    // -1 undetermined
+    // -2 certainly not split point
+    // >= label of master cell
+    labelList splitMaster(mesh_.nPoints(), -1);
+    labelList splitMasterLevel(mesh_.nPoints(), 0);
+    labelList splitMasterProc(mesh_.nPoints(), -1);
+
+    const globalMeshData& gMesh = mesh_.globalData();
+    const labelList& sharedPointLabels = gMesh.sharedPointLabels();
+
+    labelList gSharedPointCellsSize(gMesh.nGlobalPoints(),0);
+    for (label sPointI = 0; sPointI < sharedPointLabels.size(); sPointI++)
+    {
+    	gSharedPointCellsSize[gMesh.sharedPointAddr()[sPointI]]
+							  = mesh_.pointCells(sharedPointLabels[sPointI]).size();
+    }
+
+    Pstream::listCombineGather(gSharedPointCellsSize, plusEqOp<label>());
+    Pstream::listCombineScatter(gSharedPointCellsSize);
+
+    // Unmark all with not 8 cells
+    for (label sPointI = 0; sPointI < sharedPointLabels.size(); sPointI++)
+    {
+    	if( gSharedPointCellsSize[gMesh.sharedPointAddr()[sPointI]] != 8 )
+    	{
+    		splitMaster[sharedPointLabels[sPointI]] = -2;
+    	}
+    }
+
+    labelHashSet procBoundaryPoints(sharedPointLabels);
+
+    for (label pointI = 0; pointI < mesh_.nPoints(); pointI++)
+    {
+    	if(!procBoundaryPoints.found(pointI))
+    	{
+    		splitMaster[pointI] = -2;
+    	}
+    }
+
+    // Unmark all with different master cells
+    const labelList& visibleCells = history_.visibleCells();
+
+    forAll(visibleCells, cellI)
+    {
+        const labelList& cPoints = mesh_.cellPoints(cellI);
+
+        if (visibleCells[cellI] != -1 && history_.parent(cellI).index() >= 0)
+        {
+            label parentIndex = history_.parent(cellI).index();
+            label parentProc = history_.parent(cellI).proc();
+
+            // Check same master.
+            forAll(cPoints, i)
+            {
+                label pointI = cPoints[i];
+
+                label masterCellI = splitMaster[pointI];
+                label masterCellProcI = splitMasterProc[pointI];
+
+                if (masterCellI == -1)
+                {
+                    // First time visit of point. Store parent cell and
+                    // level of the parent cell (with respect to cellI). This
+                    // is additional guarantee that we're referring to the
+                    // same master at the same refinement level.
+
+                    splitMaster[pointI] = parentIndex;
+                    splitMasterProc[pointI] = parentProc;
+                    splitMasterLevel[pointI] = cellLevel_[cellI] - 1;
+                }
+                else if (masterCellI == -2)
+                {
+                    // Already decided that point is not splitPoint
+                }
+                else if
+                (
+                    (masterCellI != parentIndex) || (masterCellProcI != parentProc)
+                 || (splitMasterLevel[pointI] != cellLevel_[cellI] - 1)
+                )
+                {
+                    // Different masters so point is on two refinement
+                    // patterns
+                    splitMaster[pointI] = -2;
+                }
+            }
+        }
+        else
+        {
+            // Either not visible or is unrefined cell
+            forAll(cPoints, i)
+            {
+                label pointI = cPoints[i];
+
+                splitMaster[pointI] = -2;
+            }
+        }
+    }
+
+    // Unmark external boundary faces (but not processor boundaries)
+    labelHashSet procPatches = mesh_.boundaryMesh().findPatchIDs<processorFvPatch>();
+    for
+    (
+        label faceI = mesh_.nInternalFaces();
+        faceI < mesh_.nFaces();
+        faceI++
+    )
+    {
+    	if ( !procPatches.found(mesh_.boundaryMesh().whichPatch(faceI)) )
+    	{
+			const face& f = mesh_.faces()[faceI];
+
+			forAll(f, fp)
+			{
+				splitMaster[f[fp]] = -2;
+			}
+    	}
+    }
+
+
+    // Collect into labelList
+
+    label nSplitPoints = 0;
+
+    forAll(splitMaster, pointI)
+    {
+        if (splitMaster[pointI] >= 0)
+        {
+            nSplitPoints++;
+        }
+    }
+
+    labelList splitPoints(nSplitPoints);
+    nSplitPoints = 0;
+
+    forAll(splitMaster, pointI)
+    {
+        if (splitMaster[pointI] >= 0)
+        {
+            splitPoints[nSplitPoints++] = pointI;
+        }
+    }
+
+    return splitPoints;
+}
 
 //void Foam::hexRef8Balanced::markIndex
 //(
@@ -5803,8 +5972,8 @@ void Foam::hexRef8Balanced::setUnrefinement
     );
 
     // Remove the 8 cells that originated from merging around the split point
-    // and adapt cell levels (not that pointLevels stay the same since points
-    // either get removed or stay at the same position.
+    // and adapt cell levels (note that pointLevels stay the same since points
+    // either get removed or stay at the same position).
     forAll(splitPointLabels, i)
     {
         label pointI = splitPointLabels[i];

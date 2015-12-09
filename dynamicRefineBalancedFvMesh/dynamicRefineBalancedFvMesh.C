@@ -1006,7 +1006,7 @@ void Foam::dynamicRefineBalancedFvMesh::checkEightAnchorPoints
 
 Foam::label Foam::dynamicRefineBalancedFvMesh::topParentID(label p)
 {
-    label nextP = meshCutter().history().splitCells()[p].parent_;
+    label nextP = meshCutter().history().splitCells()[p].parent_.index();
     if( nextP < 0 )
     {
         return p;
@@ -1183,6 +1183,120 @@ void Foam::dynamicRefineBalancedFvMesh::updateRefinementField()
     Info<<"Min,max refinement field = " << Foam::min(intRefFld).value() << ", "
         << Foam::max(intRefFld).value() << endl;
         
+}
+
+Foam::labelList Foam::dynamicRefineBalancedFvMesh::selectProcBoundaryUnrefinePoints
+(
+    const scalar unrefineLevel,
+    const PackedBoolList& markedCell,
+    const scalarField& pFld
+) const
+{
+    // All points that can be unrefined
+    const labelList splitPoints(meshCutter_.getProcBoundarySplitPoints());
+
+    DynamicList<label> newSplitPoints(splitPoints.size());
+
+    Map<bool> hasMarked;
+
+    forAll(splitPoints, i)
+    {
+        label pointI = splitPoints[i];
+
+        if (pFld[pointI] < unrefineLevel)
+        {
+            // Check that all cells are not marked
+            const labelList& pCells = pointCells()[pointI];
+
+            if(!hasMarked.found(pointI))
+            {
+            	hasMarked.insert(pointI, false);
+            }
+
+            forAll(pCells, pCellI)
+            {
+                if (markedCell.get(pCells[pCellI]))
+                {
+                    hasMarked[pointI] = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    Pstream::mapCombineGather(hasMarked, orEqOp<bool>());
+    Pstream::mapCombineScatter(hasMarked);
+
+    forAll(splitPoints, i)
+    {
+        label pointI = splitPoints[i];
+		if (!hasMarked[pointI])
+		{
+			newSplitPoints.append(pointI);
+		}
+    }
+
+    newSplitPoints.shrink();
+
+    // Guarantee 2:1 refinement after unrefinement
+    labelList consistentSet
+    (
+        meshCutter_.consistentUnrefinement
+        (
+            newSplitPoints,
+            false
+        )
+    );
+
+    return consistentSet;
+}
+
+void Foam::dynamicRefineBalancedFvMesh::redistributeUnrefine(labelList& splitPoints)
+{
+    Map<label> combineCells;
+    forAll(splitPoints, i)
+    {
+        label pointI = splitPoints[i];
+        const labelList& pCells = pointCells()[pointI];
+        forAll(pCells, j)
+        {
+        	combineCells[pCells[j]] = meshCutter_.history().parent(pCells[j]).proc();
+        }
+    }
+
+    Info << "Here1" << endl;
+	labelList newDecomp(nCells(),Pstream::myProcNo());
+	Map<label>::const_iterator combineIter = combineCells.begin();
+	forAll(newDecomp, i)
+	{
+		if(combineIter == combineCells.end())
+			break;
+
+		if(combineIter.key() == i)
+		{
+			newDecomp[i] = *combineIter;
+			combineIter++;
+		}
+	}
+    Info << "Here2" << endl;
+    scalar tolDim = globalMeshData::matchTol_ * bounds().mag();
+
+    fvMeshDistribute distributor(*this, tolDim);
+
+    autoPtr<mapDistributePolyMesh> map =
+          distributor.distribute( newDecomp );
+    Info << "Here3" << endl;
+
+    meshCutter_.distribute(map);
+
+    Info << "Here4" << endl;
+
+    //Correct values on all cyclic patches
+    correctBoundaries<scalar>();
+    correctBoundaries<vector>();
+    correctBoundaries<sphericalTensor>();
+    correctBoundaries<symmTensor>();
+    correctBoundaries<tensor>();
 }
 
 void Foam::dynamicRefineBalancedFvMesh::readRefinementDict()
@@ -1630,6 +1744,19 @@ bool Foam::dynamicRefineBalancedFvMesh::updateA()
 
         {
             // Select unrefineable points that are not marked in refineCell
+            labelList procBoundaryUnrefinePoints
+            (
+                selectProcBoundaryUnrefinePoints
+                (
+                    unrefineLevel,
+                    refineCell,
+                    maxCellField(vFld)
+                )
+            );
+
+            if(!procBoundaryUnrefinePoints.empty())
+            	redistributeUnrefine(procBoundaryUnrefinePoints);
+
             labelList pointsToUnrefine
             (
                 selectUnrefinePoints
@@ -1660,7 +1787,7 @@ bool Foam::dynamicRefineBalancedFvMesh::updateA()
         {
             // Compact refinement history occassionally (how often?).
             // Unrefinement causes holes in the refinementHistory.
-            const_cast<refinementHistory&>(meshCutter().history()).compact();
+            const_cast<refinementHistoryBalanced&>(meshCutter().history()).compact();
         }
         nRefinementIterations_++;
     }
@@ -1687,9 +1814,11 @@ bool Foam::dynamicRefineBalancedFvMesh::update()
     }
     
     //Part 1 - Call normal update from dynamicRefineFvMesh
+    Info << "Running mesh update" << endl;
     bool hasChanged = updateA();
     
     // Part 2 - Load Balancing
+//    Info << "Running mesh load balance" << endl;
     dictionary refineDict
     (
         IOdictionary
@@ -1731,50 +1860,52 @@ bool Foam::dynamicRefineBalancedFvMesh::update()
         {
             Info<< "Re-balancing dynamically refined mesh" << endl;
                         
-            const labelIOList& cellLevel = meshCutter().cellLevel();
-            Map<label> coarseIDmap(100);
-            labelList uniqueIndex(nCells(),0);
+//            const labelIOList& cellLevel = meshCutter().cellLevel();
+//            Map<label> coarseIDmap(100);
+//            labelList uniqueIndex(nCells(),0);
+//
+//            label nCoarse = 0;
+//
+//            forAll(cells(), cellI)
+//            {
+//                if( cellLevel[cellI] > 0 )
+//                {
+//                    uniqueIndex[cellI] = nCells() + topParentID
+//                    (
+//                        meshCutter().history().parent(cellI).index()
+//                    );
+//                }
+//                else
+//                {
+//                    uniqueIndex[cellI] = cellI;
+//                }
+//
+//                if( coarseIDmap.insert(uniqueIndex[cellI], nCoarse) )
+//                {
+//                    ++nCoarse;
+//                }
+//            }
             
-            label nCoarse = 0;
+//            // Convert to local sequential indexing and calculate coarse
+//            // points and weights
+//            labelList localIndex(nCells(),0);
+//            pointField coarsePoints(nCoarse,vector::zero);
+//            scalarField coarseWeights(nCoarse,0.0);
+//
+//            forAll(uniqueIndex, cellI)
+//            {
+//                localIndex[cellI] = coarseIDmap[uniqueIndex[cellI]];
+//
+//                // If 2D refinement (quadtree) is ever implemented, this '3'
+//                // should be set in general as the number of refinement
+//                // dimensions.
+//                label w = (1 << (3*cellLevel[cellI]));
+//
+//                coarseWeights[localIndex[cellI]] += 1.0;
+//                coarsePoints[localIndex[cellI]] += C()[cellI]/w;
+//            }
 
-            forAll(cells(), cellI)
-            {
-                if( cellLevel[cellI] > 0 )
-                {
-                    uniqueIndex[cellI] = nCells() + topParentID
-                    (
-                        meshCutter().history().parentIndex(cellI)
-                    );
-                }
-                else
-                {
-                    uniqueIndex[cellI] = cellI;
-                }
-                
-                if( coarseIDmap.insert(uniqueIndex[cellI], nCoarse) )
-                {
-                    ++nCoarse;
-                }
-            }
-            
-            // Convert to local sequential indexing and calculate coarse
-            // points and weights
-            labelList localIndex(nCells(),0);
-            pointField coarsePoints(nCoarse,vector::zero);
-            scalarField coarseWeights(nCoarse,0.0);
-            
-            forAll(uniqueIndex, cellI)
-            {
-                localIndex[cellI] = coarseIDmap[uniqueIndex[cellI]];
-                
-                // If 2D refinement (quadtree) is ever implemented, this '3'
-                // should be set in general as the number of refinement
-                // dimensions.
-                label w = (1 << (3*cellLevel[cellI]));
-                
-                coarseWeights[localIndex[cellI]] += 1.0;
-                coarsePoints[localIndex[cellI]] += C()[cellI]/w;
-            }
+//            Info << "max weight = " << gMax(coarseWeights) << endl;
             
             //Set up decomposer - a separate dictionary is used here so
             // you can use a simple partitioning for decomposePar and
@@ -1796,14 +1927,30 @@ bool Foam::dynamicRefineBalancedFvMesh::update()
                     )
                 )
             );
-            
+
+            //Ideally we should use no agglomeration here
+//            labelList finalDecomp = decomposer().decompose
+//            (
+//                *this,
+//                localIndex, //agglomeration vector
+//                coarsePoints,
+//                coarseWeights
+//            );
             labelList finalDecomp = decomposer().decompose
             (
-                *this, 
-                localIndex,
-                coarsePoints,
-                coarseWeights
+                *this,
+                C()
             );
+
+//            List<int> cellCount(Pstream::nProcs(),0);
+//            forAll(finalDecomp, cellI)
+//            {
+//                cellCount[finalDecomp[cellI]]++;
+//            }
+//            int size = finalDecomp.size();
+//            for(size_t i = 0; i < Pstream::nProcs(); i++)
+//                sumReduce(cellCount[i],size);
+//            Info << "cellCount = " << cellCount << endl;
 
             scalar tolDim = globalMeshData::matchTol_ * bounds().mag();
             
@@ -1813,8 +1960,12 @@ bool Foam::dynamicRefineBalancedFvMesh::update()
             autoPtr<mapDistributePolyMesh> map =
                   distributor.distribute(finalDecomp);
                   
+//            Info << "Debug point at " << __FILE__ << ':' << __LINE__ << endl;
+
             meshCutter_.distribute(map);
             
+//            Info << "Debug point at " << __FILE__ << ':' << __LINE__ << endl;
+
             //Correct values on all cyclic patches
             correctBoundaries<scalar>();
             correctBoundaries<vector>();
@@ -1835,7 +1986,7 @@ bool Foam::dynamicRefineBalancedFvMesh::writeObject
 ) const
 {
     // Force refinement data to go to the current time directory.
-    const_cast<hexRef8&>(meshCutter_).setInstance(time().timeName());
+    const_cast<hexRef8Balanced&>(meshCutter_).setInstance(time().timeName());
 
     bool writeOk =
     (

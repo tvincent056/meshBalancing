@@ -45,6 +45,7 @@ SourceFiles
 #include "PackedBoolList.H"
 #include "uniformDimensionedFields.H"
 #include "cellShapeList.H"
+#include "fvMeshDistribute.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -538,6 +539,10 @@ public:
             //- Return the points at the centre of top-level split cells
             //  that can be unsplit.
             labelList getSplitPoints() const;
+
+            //- Return the points at the center of top-level split cells along processor boundaries
+            //  that can be unsplit.
+            labelList getProcBoundarySplitPoints() const;
 
             //- Given proposed
             //  splitPoints to unrefine according to calculate any clashes

@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------*\
   =========                 |
   \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
-   \\    /   O peration     |
-    \\  /    A nd           | Copyright (C) 2015 Timothy Vincent
-     \\/     M anipulation  |
+   \\    /   O peration     | 
+    \\  /    A nd           | Original Copyright (C) 2014 Tyler Voskuilen
+     \\/     M anipulation  | Updates Copyright (C) 2015 Timothy Vincent
 -------------------------------------------------------------------------------
 License
     This file is a derivative work of OpenFOAM.
@@ -36,10 +36,11 @@ SourceFiles
 #ifndef dynamicRefineBalancedFvMesh_H
 #define dynamicRefineBalancedFvMesh_H
 
+#include <fstream>
 
 #include "dynamicFvMesh.H"
 #include "dynamicRefineFvMesh.H"
-#include "hexRef8.H"
+#include "hexRef8Balanced.H"
 #include "PackedBoolList.H"
 #include "Switch.H"
 #include "decompositionMethod.H"
@@ -67,7 +68,7 @@ class dynamicRefineBalancedFvMesh
 protected:
 
         //- Mesh cutting engine
-        hexRef8 meshCutter_;
+        hexRef8Balanced meshCutter_;
 
         //- Dump cellLevel for postprocessing
         Switch dumpLevel_;
@@ -100,6 +101,9 @@ protected:
 
         //- Unrefine cells. Gets passed in centre points of cells to combine.
         autoPtr<mapPolyMesh> unrefine(const labelList&);
+
+        //- Redistribute cells to their parent processors before unrefining
+        void redistributeUnrefine(labelList& splitPoints);
 
 
         // Selection of cells to un/refine
@@ -148,6 +152,14 @@ protected:
 
             //- Select points that can be unrefined.
             virtual labelList selectUnrefinePoints
+            (
+                const scalar unrefineLevel,
+                const PackedBoolList& markedCell,
+                const scalarField& pFld
+            ) const;
+
+            //- Select points that can be unrefined.
+            virtual labelList selectProcBoundaryUnrefinePoints
             (
                 const scalar unrefineLevel,
                 const PackedBoolList& markedCell,
@@ -217,7 +229,7 @@ public:
     // Member Functions
 
         //- Direct access to the refinement engine
-        const hexRef8& meshCutter() const
+        const hexRef8Balanced& meshCutter() const
         {
             return meshCutter_;
         }

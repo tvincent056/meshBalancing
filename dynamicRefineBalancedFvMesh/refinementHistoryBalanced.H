@@ -73,10 +73,12 @@ SourceFiles
 
 #include "DynamicList.H"
 #include "labelList.H"
+#include "boolList.H"
 #include "FixedList.H"
 #include "SLList.H"
 #include "autoPtr.H"
 #include "regIOobject.H"
+#include "Pair.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -97,23 +99,57 @@ class refinementHistoryBalanced
 {
 public:
 
+	class procIndexPair
+	{
+	public:
+
+		procIndexPair();
+		procIndexPair(label proc, label index);
+		procIndexPair(Istream& is);
+
+		label& proc() {return pair_.first();}
+		label& index() {return pair_.second();}
+
+		const label& proc() const {return pair_.first();}
+		const label& index() const {return pair_.second();}
+
+        friend Istream& operator>>(Istream&, procIndexPair&);
+        friend Ostream& operator<<(Ostream&, const procIndexPair&);
+
+        bool operator!=(const procIndexPair& other) const
+		{
+        	return pair_ != other.pair_;
+		}
+
+        bool operator==(const procIndexPair& other) const
+		{
+        	return pair_ == other.pair_;
+		}
+
+	private:
+		Pair<label> pair_;
+	};
+
     class splitCell8
     {
     public:
 
-        // Index to original splitCell this cell was refined off from
-        // -1: top level cell
-        // -2: free splitCell (so should also be in freeSplitCells_)
-        label parent_;
+        //- Process and index to the original splitCell this cell was refined from
+        // index = -1: top level cell
+        // index = -2: free splitCell (so should also be in freeSplitCells_)
+        procIndexPair parent_;
 
         //- cells this cell was refined into
-        autoPtr<FixedList<label, 8> > addedCellsPtr_;
+        autoPtr<FixedList<procIndexPair, 8> > addedCellsPtr_;
 
         //- Construct null (parent = -1)
         splitCell8();
 
         //- Construct from parent
         splitCell8(const label parent);
+
+        //- Construct from parent and parent proc
+        splitCell8(const label parentProc, const label parent);
 
         //- Construct from Istream
         splitCell8(Istream& is);
@@ -137,7 +173,7 @@ public:
             addedCellsPtr_.reset
             (
                 s.addedCellsPtr_.valid()
-              ? new FixedList<label, 8>(s.addedCellsPtr_())
+              ? new FixedList<procIndexPair, 8>(s.addedCellsPtr_())
               : NULL
             );
         }
@@ -207,7 +243,7 @@ private:
         //- Allocate a splitCell. Return index in splitCells_.
         label allocateSplitCell(const label parent, const label i);
 
-        //- Free a splitCell.
+        //- Free a splitCell. Only call if all subCells for the splitCell are on this processor
         void freeSplitCell(const label index);
 
         //- Mark entry in splitCells. Recursively mark its parent and subs.
@@ -218,6 +254,14 @@ private:
             DynamicList<splitCell8>&
         ) const;
 
+        //- Mark entries in splitCells. Iteratively mark its parent and subs with cross-processor communication.
+        void parallelMarkSplits
+        (
+        	boolListList& marked,
+            labelList& oldToNew,
+            DynamicList<splitCell8>& newSplitCells
+        ) const;
+
         void countProc
         (
             const label index,
@@ -225,6 +269,24 @@ private:
             labelList& splitCellProc,
             labelList& splitCellNum
         ) const;
+
+        //- Update the processor destination for a splitCell and add its parent to the list to be checked
+        //  Must ensure that index >= 0 before calling this function
+        void parallelAddProc
+        (
+        	const label index,
+        	const label newProcNo,
+            labelListList& splitCellProc,
+            const labelListList& splitCellNum,
+        	DynamicList<procIndexPair>& parents
+        );
+
+        void parallelCountProc
+        (
+        	const label index,
+        	const label newProcNo,
+            labelListList& splitCellNum
+        );
 
 public:
 
@@ -287,7 +349,7 @@ public:
         }
 
         //- Get parent of cell
-        label parentIndex(const label cellI) const
+        procIndexPair parent(const label cellI) const
         {
             label index = visibleCells_[cellI];
 
@@ -327,8 +389,6 @@ public:
         );
 
         //- Update local numbering for mesh redistribution.
-        //  Can only distribute clusters sent across in one go; cannot
-        //  handle parts recombined in multiple passes.
         void distribute(const mapDistributePolyMesh&);
 
 
