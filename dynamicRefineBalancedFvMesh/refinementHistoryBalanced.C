@@ -32,6 +32,9 @@ License
 #include "IPstream.H"
 #include "OPstream.H"
 #include "PstreamReduceOps.H"
+//#include <fstream> //temporary for debugging
+//#include "Time.H" //temporary for debugging
+
 
 // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
 
@@ -304,6 +307,12 @@ void Foam::refinementHistoryBalanced::freeSplitCell(const label index)
     // Make sure parent does not point to me anymore.
     if (split.parent_.index() >= 0)
     {
+    	if(split.parent_.proc() != Pstream::myProcNo())
+    	{
+            FatalErrorIn("refinementHistoryBalanced::freeSplitCell")
+                << "Problem: parent is not on same process as children"
+				<< abort(FatalError);
+    	}
 
         autoPtr<FixedList<procIndexPair, 8> >& subCellsPtr =
             splitCells_[split.parent_.index()].addedCellsPtr_;
@@ -792,21 +801,17 @@ void Foam::refinementHistoryBalanced::parallelCountProc
 void Foam::refinementHistoryBalanced::parallelAddProc
 (
 	const label index,
-	const label newProcNo,
-	labelListList& splitCellProc,
 	const labelListList& splitCellNum,
-	DynamicList<procIndexPair>& parents
+	List<labelHashSet>& parents
 )
 {
 	label parentIndex = splitCells_[index].parent_.index();
 	label parentProc = splitCells_[index].parent_.proc();
-	if (parentIndex >= 0 && parentProc == Pstream::myProcNo())
+	if (parentIndex >= 0)
 	{
-		if(splitCellNum[parentProc][parentIndex] == 8
-				&& splitCellProc[parentProc][parentIndex] == parentProc)
+		if(splitCellNum[parentProc][parentIndex] == 8)
 		{
-			splitCellProc[parentProc][parentIndex] = newProcNo;
-			parents.append(procIndexPair(newProcNo,parentIndex));
+			parents[parentProc].insert(parentIndex);
 		}
 	}
 }
@@ -891,9 +896,8 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 
 //    Info << "splitCellNum = " << splitCellNum << endl;
 
-    // Per processor, pairs of local splitCell indices and destination processors
-    DynamicList<procIndexPair> parents;
-
+    // Per processor, local splitCell indices that are moving off processor
+    List<labelHashSet> parents(Pstream::nProcs());
 	forAll(visibleCells_, cellI)
 	{
 		label index = visibleCells_[cellI];
@@ -914,13 +918,39 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 		if(index >= 0)
 		{
 			splitCellProc[Pstream::myProcNo()][index] = destination[cellI];
-			parallelAddProc(index, destination[cellI], splitCellProc, splitCellNum, parents);
+			parallelAddProc(index, splitCellNum, parents);
 		}
 	}
 
-	parents.shrink();
+	Pstream::gatherList(splitCellProc);
+	Pstream::scatterList(splitCellProc);
 
-	bool complete = parents.size() > 0;
+	for (label procI = 0; procI < Pstream::nProcs(); procI++)
+	{
+        // Send to neighbors
+        OPstream toNbr(Pstream::blocking, procI);
+        toNbr << parents[procI];
+        parents[procI].clear();
+	}
+
+	for (label procI = 0; procI < Pstream::nProcs(); procI++)
+	{
+		// Receive from neighbors
+        IPstream fromNbr(Pstream::blocking, procI);
+        labelHashSet newParents(fromNbr);
+        parents[Pstream::myProcNo()] |= newParents;
+	}
+
+	forAllConstIter(labelHashSet,parents[Pstream::myProcNo()],iter)
+	{
+		procIndexPair& firstChild = splitCells_[iter.key()].addedCellsPtr_()[0];
+		splitCellProc[Pstream::myProcNo()][iter.key()] = splitCellProc[firstChild.proc()][firstChild.index()];
+	}
+
+	Pstream::gatherList(splitCellProc);
+	Pstream::scatterList(splitCellProc);
+
+	bool complete = parents[Pstream::myProcNo()].size() == 0;
 	reduce(complete, andOp<bool>());
 
 	if(debug)
@@ -933,29 +963,24 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 
 	while(!complete)
 	{
-
-//		for (label procI = 0; procI < Pstream::nProcs(); procI++)
-//		{
-//	        // Send to neighbors
-//	        OPstream toNbr(Pstream::blocking, procI);
-//	        toNbr << parents[procI];
-//	        parents[procI].clear();
-//		}
-//
-//		for (label procI = 0; procI < Pstream::nProcs(); procI++)
-//		{
-//			// Receive from neighbors
-//	        IPstream fromNbr(Pstream::blocking, procI);
-//	        DynamicList<procIndexPair> newParents(fromNbr);
-//	        parents[Pstream::myProcNo()].append(newParents);
-//		}
+		forAll(splitCellNum,procI)
+		{
+			if(procI != Pstream::myProcNo())
+			{
+				forAll(splitCellNum[procI],i)
+				{
+					splitCellNum[procI][i] = 0;
+				}
+			}
+		}
 
 		complete = true;
-		forAll(parents,i)
+
+		forAllConstIter(labelHashSet,parents[Pstream::myProcNo()],iter)
 		{
 			complete = false;
-			procIndexPair& parent = parents[i];
-			parallelCountProc(parent.index(), parent.proc(), splitCellNum);
+			label parent = iter.key();
+			parallelCountProc(parent, splitCellProc[Pstream::myProcNo()][parent], splitCellNum);
 		}
 
 		forAll(splitCellNum,procI)
@@ -964,18 +989,88 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
 			Pstream::listCombineScatter(splitCellNum[procI]);
 		}
 
-		while(parents.size() > 0)
 		{
-			complete = false;
-			procIndexPair parent = parents.remove();
-			parallelAddProc(parent.index(), parent.proc(), splitCellProc, splitCellNum, parents);
+			List<labelHashSet> nextParents(Pstream::nProcs());
+			forAllConstIter(labelHashSet,parents[Pstream::myProcNo()],iter)
+			{
+				complete = false;
+				label parent = iter.key();
+				parallelAddProc(parent, splitCellNum, nextParents);
+			}
+			parents = nextParents;
 		}
+
+		for (label procI = 0; procI < Pstream::nProcs(); procI++)
+		{
+	        // Send to neighbors
+	        OPstream toNbr(Pstream::blocking, procI);
+	        toNbr << parents[procI];
+	        parents[procI].clear();
+		}
+
+		for (label procI = 0; procI < Pstream::nProcs(); procI++)
+		{
+			// Receive from neighbors
+	        IPstream fromNbr(Pstream::blocking, procI);
+	        labelHashSet newParents(fromNbr);
+	        parents[Pstream::myProcNo()] |= newParents;
+		}
+
+		forAllConstIter(labelHashSet,parents[Pstream::myProcNo()],iter)
+		{
+			procIndexPair& firstChild = splitCells_[iter.key()].addedCellsPtr_()[0];
+			splitCellProc[Pstream::myProcNo()][iter.key()] = splitCellProc[firstChild.proc()][firstChild.index()];
+		}
+		Pstream::gatherList(splitCellProc);
+		Pstream::scatterList(splitCellProc);
 
 		reduce(complete, andOp<bool>());
     }
 
-	Pstream::gatherList(splitCellProc);
-	Pstream::scatterList(splitCellProc);
+//	//Debugging
+//	std::ostringstream timeInfoFilename;
+//	timeInfoFilename << time().timeName() << "_" << Pstream::myProcNo();
+//	std::ofstream timeInfo(timeInfoFilename.str().c_str());
+//
+//	forAll(splitCellProc[Pstream::myProcNo()],i)
+//	{
+//		bool fail = true;
+//		if(splitCells_[i].addedCellsPtr_.valid())
+//		{
+//			const FixedList<procIndexPair, 8>& splits = splitCells_[i].addedCellsPtr_();
+//			forAll(splits, j)
+//			{
+//				if (splits[j].index() >= 0)
+//				{
+//					if(splitCellProc[splits[j].proc()][splits[j].index()] == splitCellProc[Pstream::myProcNo()][i])
+//						fail = false;
+//				}
+//			}
+//		}
+//		else
+//			fail = false;
+//
+//		if(fail)
+//		{
+//			timeInfo << "(" << Pstream::myProcNo() << "," << i << ") -> " << splitCellProc[Pstream::myProcNo()][i] << std::endl;
+//			if(splitCells_[i].addedCellsPtr_.valid())
+//			{
+//				const FixedList<procIndexPair, 8>& splits = splitCells_[i].addedCellsPtr_();
+//				forAll(splits, j)
+//				{
+//					if (splits[j].index() >= 0)
+//					{
+//						timeInfo << "    (" << splits[j].proc() << "," << splits[j].index() << ") -> " << splitCellProc[splits[j].proc()][splits[j].index()] << std::endl;
+//					}
+//				}
+//			}
+//			else
+//			{
+//				timeInfo << "    No children" << std::endl;
+//			}
+//		}
+//	}
+//	timeInfo.close();
 
     //Pout<< "refinementHistoryBalanced::distribute :"
     //    << " splitCellProc:" << splitCellProc << endl;
@@ -1414,12 +1509,55 @@ void Foam::refinementHistoryBalanced::combineCells
     label parentIndex = splitCells_[visibleCells_[masterCellI]].parent_.index();
 	label parentProc = splitCells_[visibleCells_[masterCellI]].parent_.proc();
 
+	if(parentProc != Pstream::myProcNo())
+	{
+        FatalErrorIn("refinementHistoryBalanced::combineCells")
+            << "Problem: parent is not on my process" << endl
+			<< "parentIndex: " << parentIndex << endl
+			<< "parentProc: " << parentProc << endl
+			<< "masterCellI: " << masterCellI << endl
+            << abort(FatalError);
+	}
+
     // Remove the information for the combined cells
     forAll(combinedCells, i)
     {
         label cellI = combinedCells[i];
 
-        freeSplitCell(visibleCells_[cellI]);
+        label index = visibleCells_[cellI];
+        splitCell8& split = splitCells_[index];
+
+        // Make sure parent does not point to me anymore.
+        if (split.parent_.index() >= 0)
+        {
+
+            autoPtr<FixedList<procIndexPair, 8> >& subCellsPtr =
+                splitCells_[split.parent_.index()].addedCellsPtr_;
+
+            if (subCellsPtr.valid())
+            {
+                FixedList<procIndexPair, 8>& subCells = subCellsPtr();
+
+                label myPos = findIndex(subCells, procIndexPair(Pstream::myProcNo(),index));
+
+                if (myPos == -1)
+                {
+                    FatalErrorIn("refinementHistoryBalanced::freeSplitCell")
+                        << "Problem: cannot find myself in"
+                        << " parents' children" << abort(FatalError);
+                }
+                else
+                {
+                    subCells[myPos] = procIndexPair(-1,-1);
+                }
+            }
+        }
+
+        // Mark splitCell as free
+        split.parent_.index()= -2;
+
+        // Add to cache of free splitCells
+        freeSplitCells_.append(index);
         visibleCells_[cellI] = -1;
     }
 

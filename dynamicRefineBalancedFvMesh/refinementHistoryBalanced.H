@@ -79,6 +79,7 @@ SourceFiles
 #include "autoPtr.H"
 #include "regIOobject.H"
 #include "Pair.H"
+#include "HashSet.H"
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 
@@ -275,10 +276,8 @@ private:
         void parallelAddProc
         (
         	const label index,
-        	const label newProcNo,
-            labelListList& splitCellProc,
             const labelListList& splitCellNum,
-        	DynamicList<procIndexPair>& parents
+			List<labelHashSet>& parents
         );
 
         void parallelCountProc

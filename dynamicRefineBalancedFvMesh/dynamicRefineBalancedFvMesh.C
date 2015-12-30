@@ -1193,31 +1193,35 @@ Foam::labelList Foam::dynamicRefineBalancedFvMesh::selectProcBoundaryUnrefinePoi
 ) const
 {
     // All points that can be unrefined
-    const labelList splitPoints(meshCutter_.getProcBoundarySplitPoints());
+    const labelList sharedSplitPoints(meshCutter_.getProcBoundarySplitPoints());
 
-    DynamicList<label> newSplitPoints(splitPoints.size());
+    DynamicList<label> newSplitPoints(sharedSplitPoints.size());
+    const labelList& sharedPointLabels = globalData().sharedPointLabels();
+    const labelList& sharedPointAddr = globalData().sharedPointAddr();
 
     Map<bool> hasMarked;
 
-    forAll(splitPoints, i)
+    forAll(sharedSplitPoints, i)
     {
-        label pointI = splitPoints[i];
+        label sPointI = sharedSplitPoints[i];
+        label pointI = sharedPointLabels[sPointI];
+        label gPointI = sharedPointAddr[sPointI];
 
         if (pFld[pointI] < unrefineLevel)
         {
             // Check that all cells are not marked
             const labelList& pCells = pointCells()[pointI];
 
-            if(!hasMarked.found(pointI))
+            if(!hasMarked.found(gPointI))
             {
-            	hasMarked.insert(pointI, false);
+            	hasMarked.insert(gPointI, false);
             }
 
             forAll(pCells, pCellI)
             {
                 if (markedCell.get(pCells[pCellI]))
                 {
-                    hasMarked[pointI] = true;
+                    hasMarked[gPointI] = true;
                     break;
                 }
             }
@@ -1227,12 +1231,13 @@ Foam::labelList Foam::dynamicRefineBalancedFvMesh::selectProcBoundaryUnrefinePoi
     Pstream::mapCombineGather(hasMarked, orEqOp<bool>());
     Pstream::mapCombineScatter(hasMarked);
 
-    forAll(splitPoints, i)
+    forAll(sharedSplitPoints, i)
     {
-        label pointI = splitPoints[i];
-		if (!hasMarked[pointI])
+        label sPointI = sharedSplitPoints[i];
+        label gPointI = sharedPointAddr[sPointI];
+		if (hasMarked.found(gPointI) && !hasMarked[gPointI])
 		{
-			newSplitPoints.append(pointI);
+			newSplitPoints.append(sharedPointLabels[sPointI]);
 		}
     }
 
@@ -1260,11 +1265,10 @@ void Foam::dynamicRefineBalancedFvMesh::redistributeUnrefine(labelList& splitPoi
         const labelList& pCells = pointCells()[pointI];
         forAll(pCells, j)
         {
-        	combineCells[pCells[j]] = meshCutter_.history().parent(pCells[j]).proc();
+        	combineCells.insert(pCells[j], meshCutter_.history().parent(pCells[j]).proc());
         }
     }
 
-    Info << "Here1" << endl;
 	labelList newDecomp(nCells(),Pstream::myProcNo());
 	Map<label>::const_iterator combineIter = combineCells.begin();
 	forAll(newDecomp, i)
@@ -1278,18 +1282,14 @@ void Foam::dynamicRefineBalancedFvMesh::redistributeUnrefine(labelList& splitPoi
 			combineIter++;
 		}
 	}
-    Info << "Here2" << endl;
     scalar tolDim = globalMeshData::matchTol_ * bounds().mag();
 
     fvMeshDistribute distributor(*this, tolDim);
 
     autoPtr<mapDistributePolyMesh> map =
           distributor.distribute( newDecomp );
-    Info << "Here3" << endl;
 
     meshCutter_.distribute(map);
-
-    Info << "Here4" << endl;
 
     //Correct values on all cyclic patches
     correctBoundaries<scalar>();
@@ -1754,7 +1754,10 @@ bool Foam::dynamicRefineBalancedFvMesh::updateA()
                 )
             );
 
-            if(!procBoundaryUnrefinePoints.empty())
+        	bool hasProcBoundaryUnrefinePoints = !procBoundaryUnrefinePoints.empty();
+        	Foam::reduce(hasProcBoundaryUnrefinePoints,orOp<bool>());
+
+            if(hasProcBoundaryUnrefinePoints)
             	redistributeUnrefine(procBoundaryUnrefinePoints);
 
             labelList pointsToUnrefine

@@ -43,7 +43,6 @@ License
 #include "refinementData.H"
 #include "refinementDistanceData.H"
 #include "degenerateMatcher.H"
-#include "processorFvPatch.H"
 
 // * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
 
@@ -5382,8 +5381,8 @@ Foam::labelList Foam::hexRef8Balanced::getProcBoundarySplitPoints() const
     	}
     }
 
+    // Unmark all not on a processor boundary
     labelHashSet procBoundaryPoints(sharedPointLabels);
-
     for (label pointI = 0; pointI < mesh_.nPoints(); pointI++)
     {
     	if(!procBoundaryPoints.found(pointI))
@@ -5452,7 +5451,8 @@ Foam::labelList Foam::hexRef8Balanced::getProcBoundarySplitPoints() const
     }
 
     // Unmark external boundary faces (but not processor boundaries)
-    labelHashSet procPatches = mesh_.boundaryMesh().findPatchIDs<processorFvPatch>();
+    labelHashSet procPatches = mesh_.boundaryMesh().findPatchIDs<processorPolyPatch>();
+
     for
     (
         label faceI = mesh_.nInternalFaces();
@@ -5484,18 +5484,18 @@ Foam::labelList Foam::hexRef8Balanced::getProcBoundarySplitPoints() const
         }
     }
 
-    labelList splitPoints(nSplitPoints);
+    labelList sharedSplitPoints(nSplitPoints);
     nSplitPoints = 0;
 
-    forAll(splitMaster, pointI)
+    forAll(sharedPointLabels, sPointI)
     {
-        if (splitMaster[pointI] >= 0)
+        if (splitMaster[sharedPointLabels[sPointI]] >= 0)
         {
-            splitPoints[nSplitPoints++] = pointI;
+            sharedSplitPoints[nSplitPoints++] = sPointI;
         }
     }
 
-    return splitPoints;
+    return sharedSplitPoints;
 }
 
 //void Foam::hexRef8Balanced::markIndex
