@@ -839,13 +839,6 @@ void Foam::refinementHistoryBalanced::distribute(const mapDistributePolyMesh& ma
     //writeDebug();
     //Pout<< "---------" << nl << endl;
 
-
-    // Distribution is only partially functional.
-    // If all 8 cells resulting from a single parent are sent across in one
-    // go it will also send across that part of the refinement history.
-    // If however e.g. first 1 and then the other 7 are sent across the
-    // history will not be reconstructed.
-
     // Determine clusters. This is per every entry in splitCells_ (that is
     // a parent of some refinement) a label giving the processor it goes to
     // if all its children are going to the same processor.
