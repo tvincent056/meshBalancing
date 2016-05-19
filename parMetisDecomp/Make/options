@@ -1,0 +1,14 @@
+sinclude $(GENERAL_RULES)/mplib$(WM_MPLIB)
+sinclude $(RULES)/mplib$(WM_MPLIB)
+
+EXE_INC = \
+    $(PFLAGS) $(PINC) \
+    -I$(PARMETIS_ROOT)/include \
+    -I$(LIB_SRC)/parallel/decompose/decompositionMethods/lnInclude \
+    -I$(LIB_SRC)/parallel/decompose/metisDecomp/lnInclude \
+    -I$(LIB_SRC)/parallel/decompose/scotchDecomp/lnInclude
+
+LIB_LIBS = \
+    -L$(FOAM_EXT_LIBBIN)/$(FOAM_MPI) \
+    -L$(PARMETIS_ROOT)/lib -lparmetis -lmetis ${LINK_FLAGS} -lrt
+

@@ -13,4 +13,5 @@ LIB_LIBS = \
     -lfiniteVolume \
     -ldynamicFvMesh \
     -ldecompositionMethods \
-    -L$(FOAM_LIBBIN)/dummy -lptscotchDecomp
+    -L$(FOAM_LIBBIN)/dummy -lptscotchDecomp -lmetisDecomp \
+    -L$(FOAM_USER_LIBBIN) -lparMetisDecomp
