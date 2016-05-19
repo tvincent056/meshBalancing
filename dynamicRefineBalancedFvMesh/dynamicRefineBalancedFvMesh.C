@@ -1988,8 +1988,8 @@ bool Foam::dynamicRefineBalancedFvMesh::writeObject
     IOstream::compressionType cmp
 ) const
 {
-    // Force refinement data to go to the current time directory.
-    const_cast<hexRef8Balanced&>(meshCutter_).setInstance(time().timeName());
+    // Force refinement data to go to the same directory.
+	const_cast<hexRef8Balanced&>(meshCutter_).setInstance(pointsInstance());
 
     bool writeOk =
     (
@@ -2026,6 +2026,5 @@ bool Foam::dynamicRefineBalancedFvMesh::writeObject
 
     return writeOk;
 }
-
 
 // ************************************************************************* //
