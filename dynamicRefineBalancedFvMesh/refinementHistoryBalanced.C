@@ -1504,6 +1504,7 @@ void Foam::refinementHistoryBalanced::combineCells
 
 	if(parentProc != Pstream::myProcNo())
 	{
+		write();
         FatalErrorIn("refinementHistoryBalanced::combineCells")
             << "Problem: parent is not on my process" << endl
 			<< "parentIndex: " << parentIndex << endl
